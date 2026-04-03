@@ -1026,7 +1026,38 @@ Then:
 
 Check if the hammer icon appears now.
 
+
+No it didn't work because there is already other claude_desktop_config_file in C:\Users\crist\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude           I updated it to the attached json
+Attached jsoon is of same name is as claude_desktop
+I can't read Windows files from here, but the key insight is clear:
+
+You have the **Microsoft Store version** of Claude Desktop, so the correct config file path is:
+
+```
+C:\Users\crist\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json
+```
+
+**Not** the `%APPDATA%\Claude\` path we were editing before.
+
+Please confirm — did you already update **that** file with the `uvx.exe` config? Run this to verify:
+
+```powershell
+cat "C:\Users\crist\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json"
+```
+
+Paste the output so I can confirm the JSON is correct. Then fully quit and reopen Claude Desktop.
+
+$ cat "C:\Users\crist\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json"
+
 {
+  "preferences": {
+    "coworkScheduledTasksEnabled": true,
+    "ccdScheduledTasksEnabled": true,
+    "sidebarMode": "chat",
+    "bypassPermissionsModeEnabled": true,
+    "coworkWebSearchEnabled": true,
+    "launchPreviewPersistSession": true
+  },
   "mcpServers": {
     "filesystem": {
       "command": "npx",
@@ -1045,3 +1076,13 @@ Check if the hammer icon appears now.
   }
 }
 
+
+The config looks correct. Now:
+
+1. **Fully quit** Claude Desktop (right-click tray icon near the clock → **Quit**)
+2. **Reopen** Claude Desktop
+3. **Wait 1-2 minutes** for the MCP server to initialize on first launch
+
+Then check for the hammer icon. Does it show up now?
+
+Still it is not showing
