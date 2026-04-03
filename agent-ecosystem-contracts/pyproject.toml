@@ -1,0 +1,13 @@
+[project]
+name = "agent-ecosystem-contracts"
+version = "0.1.0"
+description = "Shared event contracts for multi-agent orchestration ecosystems."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ecosystem Maintainers" }]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
