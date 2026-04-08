@@ -16,7 +16,7 @@ Success means Cloudflare API reads succeed for the target account, Workers inven
 - Ensure the connected identity has access to account `892897b63066abdd897d63d050555ff0`.
 - If the plugin supports scope selection, require read access for Workers and account resources at minimum.
 
-2. Validate authentication with read-only API calls, in this exact order:
+2. Validate authentication with read-only API calls, in this exact order (all paths are relative to the v4 base `https://api.cloudflare.com/client/v4`):
 - `GET /accounts/{account_id}/workers/account-settings`
 - `GET /accounts/{account_id}/workers/scripts`
 - `GET /accounts/{account_id}/pages/projects`
@@ -25,7 +25,7 @@ Success means Cloudflare API reads succeed for the target account, Workers inven
 This sequence proves the token is valid, the account is correct, and the accessible product surfaces are known.
 
 3. Interpret failures deterministically:
-- `10000 Authentication error`: plugin session/token is invalid or disconnected; repeat plugin re-auth.
+- `10000 Authentication error` (Cloudflare JSON `errors[].code`, often with HTTP `401` or `403`): plugin session/token is invalid or disconnected; repeat plugin re-auth.
 - `403` or authorization-style denial: token is valid but lacks scope or account membership.
 - `404` on Workers endpoints after auth succeeds: account mismatch or product not enabled on that account.
 - Mixed success across endpoints: keep Workers as the primary surface and note restricted access elsewhere.
@@ -41,6 +41,7 @@ This sequence proves the token is valid, the account is correct, and the accessi
 - The next phase starts only after authenticated inventory is available.
 
 ## Important Interfaces
+- Cloudflare REST base: [https://api.cloudflare.com/client/v4](https://api.cloudflare.com/client/v4) (official reference: [Cloudflare API](https://developers.cloudflare.com/api/))
 - Cloudflare MCP read path: `mcp__cloudflare_api__execute`
 - Target account: `892897b63066abdd897d63d050555ff0`
 - Primary validation endpoints:

@@ -1,0 +1,16 @@
+{
+  "name": "zeus-orchestrator-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --test",
+    "smoke:deploy": "node ./scripts/deploy-cloudflare.mjs --smoke",
+    "deploy:api": "node ./scripts/deploy-cloudflare.mjs",
+    "deploy:wrangler": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.80.0"
+  }
+}
