@@ -56,6 +56,7 @@ export class WorkflowCoordinator extends DurableObject {
     this.workflowId = null;
     this.snapshot = null;
     this.loadPromise = null;
+    this.mutationQueue = Promise.resolve();
   }
 
   async fetch(request) {
@@ -129,30 +130,32 @@ export class WorkflowCoordinator extends DurableObject {
   }
 
   async handleInit(request) {
-    if (this.snapshot) {
-      throw new HttpError(409, "workflow_exists", `Workflow '${this.workflowId}' already exists.`);
-    }
-
     const body = await readJson(request);
-    const now = Date.now();
-    const workflow = createWorkflowRecord({
-      workflowId: this.workflowId,
-      name: body.name,
-      metadata: body.metadata,
-      now,
+    return this.withMutationLock(async () => {
+      if (this.snapshot) {
+        throw new HttpError(409, "workflow_exists", `Workflow '${this.workflowId}' already exists.`);
+      }
+
+      const now = Date.now();
+      const workflow = createWorkflowRecord({
+        workflowId: this.workflowId,
+        name: body.name,
+        metadata: body.metadata,
+        now,
+      });
+
+      await this.env.DB.batch([workflowInsertStatement(this.env.DB, workflow)]);
+      this.snapshot = {
+        workflow,
+        tasks: [],
+        dependencyRows: [],
+        dependenciesByTaskId: {},
+        dependentsByTaskId: {},
+        readyTaskIds: [],
+      };
+
+      return json({ workflow: serializeSnapshot(this.snapshot).workflow }, { status: 201 });
     });
-
-    await this.env.DB.batch([workflowInsertStatement(this.env.DB, workflow)]);
-    this.snapshot = {
-      workflow,
-      tasks: [],
-      dependencyRows: [],
-      dependenciesByTaskId: {},
-      dependentsByTaskId: {},
-      readyTaskIds: [],
-    };
-
-    return json({ workflow: serializeSnapshot(this.snapshot).workflow }, { status: 201 });
   }
 
   handleGetWorkflow() {
@@ -161,107 +164,117 @@ export class WorkflowCoordinator extends DurableObject {
   }
 
   async handleBulkTasks(request) {
-    this.assertWorkflowLoaded();
     const body = await readJson(request);
-    const now = Date.now();
-    const result = normalizeBulkTasks(this.snapshot, body.tasks, {
-      now,
-      idFactory: () => crypto.randomUUID(),
+    return this.withMutationLock(async () => {
+      this.assertWorkflowLoaded();
+      const now = Date.now();
+      const result = normalizeBulkTasks(this.snapshot, body.tasks, {
+        now,
+        idFactory: () => crypto.randomUUID(),
+      });
+
+      await this.env.DB.batch([
+        workflowUpdateStatement(this.env.DB, result.snapshot.workflow),
+        ...result.createdTasks.map((task) => taskInsertStatement(this.env.DB, task)),
+        ...result.dependencyRows.map((row) => dependencyInsertStatement(this.env.DB, row)),
+        ...result.taskEvents.map((event) => taskEventInsertStatement(this.env.DB, event)),
+      ]);
+      this.snapshot = result.snapshot;
+
+      return json(
+        {
+          tasks: serializeSnapshot(this.snapshot).tasks.filter((task) =>
+            result.createdTasks.some((createdTask) => createdTask.id === task.id),
+          ),
+          readyTaskIds: result.snapshot.readyTaskIds,
+          dependencyGraph: result.createdTasks.map((task) => ({
+            taskId: task.id,
+            clientKey: task.clientKey,
+            dependencies: result.snapshot.dependenciesByTaskId[task.id] ?? [],
+          })),
+        },
+        { status: 201 },
+      );
     });
-
-    await this.env.DB.batch([
-      workflowUpdateStatement(this.env.DB, result.snapshot.workflow),
-      ...result.createdTasks.map((task) => taskInsertStatement(this.env.DB, task)),
-      ...result.dependencyRows.map((row) => dependencyInsertStatement(this.env.DB, row)),
-      ...result.taskEvents.map((event) => taskEventInsertStatement(this.env.DB, event)),
-    ]);
-    this.snapshot = result.snapshot;
-
-    return json(
-      {
-        tasks: serializeSnapshot(this.snapshot).tasks.filter((task) =>
-          result.createdTasks.some((createdTask) => createdTask.id === task.id),
-        ),
-        readyTaskIds: result.snapshot.readyTaskIds,
-        dependencyGraph: result.createdTasks.map((task) => ({
-          taskId: task.id,
-          clientKey: task.clientKey,
-          dependencies: result.snapshot.dependenciesByTaskId[task.id] ?? [],
-        })),
-      },
-      { status: 201 },
-    );
   }
 
   async handleClaim(request, taskId) {
-    this.assertWorkflowLoaded();
     const body = await readJson(request);
-    const now = Date.now();
-    const result = claimTask(this.snapshot, taskId, body, {
-      now,
-      idFactory: () => crypto.randomUUID(),
-    });
+    return this.withMutationLock(async () => {
+      this.assertWorkflowLoaded();
+      const now = Date.now();
+      const result = claimTask(this.snapshot, taskId, body, {
+        now,
+        idFactory: () => crypto.randomUUID(),
+      });
 
-    await this.persistTransition(result);
-    this.snapshot = result.snapshot;
+      await this.persistTransition(result);
+      this.snapshot = result.snapshot;
 
-    return json({
-      task: serializeSnapshot(this.snapshot).tasks.find((task) => task.id === taskId),
-      readyTaskIds: this.snapshot.readyTaskIds,
+      return json({
+        task: serializeSnapshot(this.snapshot).tasks.find((task) => task.id === taskId),
+        readyTaskIds: this.snapshot.readyTaskIds,
+      });
     });
   }
 
   async handleComplete(request, taskId) {
-    this.assertWorkflowLoaded();
     const body = await readJson(request);
-    const now = Date.now();
-    const result = completeTask(this.snapshot, taskId, body, {
-      now,
-      idFactory: () => crypto.randomUUID(),
-    });
+    return this.withMutationLock(async () => {
+      this.assertWorkflowLoaded();
+      const now = Date.now();
+      const result = completeTask(this.snapshot, taskId, body, {
+        now,
+        idFactory: () => crypto.randomUUID(),
+      });
 
-    await this.persistTransition(result);
-    this.snapshot = result.snapshot;
+      await this.persistTransition(result);
+      this.snapshot = result.snapshot;
 
-    return json({
-      task: serializeSnapshot(this.snapshot).tasks.find((task) => task.id === taskId),
-      readyTaskIds: this.snapshot.readyTaskIds,
+      return json({
+        task: serializeSnapshot(this.snapshot).tasks.find((task) => task.id === taskId),
+        readyTaskIds: this.snapshot.readyTaskIds,
+      });
     });
   }
 
   async handleFail(request, taskId) {
-    this.assertWorkflowLoaded();
     const body = await readJson(request);
-    const now = Date.now();
-    const result = failTask(this.snapshot, taskId, body, {
-      now,
-      idFactory: () => crypto.randomUUID(),
-    });
+    return this.withMutationLock(async () => {
+      this.assertWorkflowLoaded();
+      const now = Date.now();
+      const result = failTask(this.snapshot, taskId, body, {
+        now,
+        idFactory: () => crypto.randomUUID(),
+      });
 
-    await this.persistTransition(result);
-    this.snapshot = result.snapshot;
+      await this.persistTransition(result);
+      this.snapshot = result.snapshot;
 
-    return json({
-      task: serializeSnapshot(this.snapshot).tasks.find((task) => task.id === taskId),
-      readyTaskIds: this.snapshot.readyTaskIds,
-      workflow: serializeSnapshot(this.snapshot).workflow,
+      return json({
+        task: serializeSnapshot(this.snapshot).tasks.find((task) => task.id === taskId),
+        readyTaskIds: this.snapshot.readyTaskIds,
+        workflow: serializeSnapshot(this.snapshot).workflow,
+      });
     });
   }
 
   async handleCreateMessage(request) {
-    this.assertWorkflowLoaded();
     const body = await readJson(request);
-    const message = createMessageRecord({
-      workflowId: this.workflowId,
-      from: body.from,
-      type: body.type,
-      payload: body.payload,
-      now: Date.now(),
-      idFactory: () => crypto.randomUUID(),
-    });
+    return this.withMutationLock(async () => {
+      this.assertWorkflowLoaded();
+      const message = createMessageRecord({
+        workflowId: this.workflowId,
+        from: body.from,
+        type: body.type,
+        payload: body.payload,
+        now: Date.now(),
+        idFactory: () => crypto.randomUUID(),
+      });
 
-    await this.env.DB.batch([messageInsertStatement(this.env.DB, message)]);
-    return json({ message }, { status: 201 });
+      await this.env.DB.batch([messageInsertStatement(this.env.DB, message)]);
+      return json({ message }, { status: 201 });
+    });
   }
 
   async handleListMessages(url) {
@@ -315,6 +328,25 @@ export class WorkflowCoordinator extends DurableObject {
   assertWorkflowLoaded() {
     if (!this.snapshot) {
       throw new HttpError(404, "workflow_not_found", `Workflow '${this.workflowId}' was not found.`);
+    }
+  }
+
+  async withMutationLock(handler) {
+    const prior = this.mutationQueue;
+    let releaseQueue;
+    const gate = new Promise((resolve) => {
+      releaseQueue = resolve;
+    });
+    this.mutationQueue = prior.then(
+      () => gate,
+      () => gate,
+    );
+
+    await prior;
+    try {
+      return await handler();
+    } finally {
+      releaseQueue();
     }
   }
 }
